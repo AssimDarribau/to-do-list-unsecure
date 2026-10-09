@@ -1,0 +1,4 @@
+# Clés privées : ne jamais commiter
+*.key
+id_*
+!*.pub

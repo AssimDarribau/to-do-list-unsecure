@@ -1,0 +1,3 @@
+---
+django_debug: true
+prod_env: false

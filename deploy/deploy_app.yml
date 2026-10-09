@@ -1,0 +1,342 @@
+---
+- name: Déploiement de la todolist
+  hosts: my_infra
+  become: true
+
+  vars:
+    app_user: todolist
+    app_dir: /opt/todolist
+    venv_dir: /opt/todolist-venv
+    app_repo: https://github.com/AssimDarribau/to-do-list-unsecure.git
+    # Branche à déployer : passée par Jenkins (-e branch=...), main par défaut
+    app_branch: "{{ branch | default('main') }}"
+
+  pre_tasks:
+    - name: Règle de sécurité - la production ne reçoit que la branche main
+      ansible.builtin.assert:
+        that:
+          - not (prod_env | default(false)) or app_branch == 'main'
+        fail_msg: >-
+          REFUS : déploiement de la branche '{{ app_branch }}' sur {{ inventory_hostname }} (production).
+          Seule la branche main, validée, peut être déployée en production.
+        success_msg: "Branche {{ app_branch }} autorisée sur {{ inventory_hostname }}"
+
+  tasks:
+    - name: Test de connexion
+      ansible.builtin.ping:
+
+    - name: Installation des paquets système
+      ansible.builtin.apt:
+        name:
+          - python3
+          - python3-venv
+          - python3-pip
+          - python3-dev
+          - build-essential
+          - git
+          - acl
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Création de l'utilisateur système de l'application
+      ansible.builtin.user:
+        name: "{{ app_user }}"
+        system: true
+        shell: /usr/sbin/nologin
+        home: "{{ app_dir }}"
+        create_home: false
+
+    - name: Dossier de l'application, propriété de l'utilisateur dédié
+      ansible.builtin.file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: "0750"
+
+    - name: Récupération des sources depuis GitHub (branche main)
+      ansible.builtin.git:
+        repo: "{{ app_repo }}"
+        dest: "{{ app_dir }}"
+        version: "{{ app_branch }}"
+        force: true
+      become_user: "{{ app_user }}"
+      notify: Redémarrer todolist
+
+    - name: Passage de Django en mode production (DEBUG = False)
+      ansible.builtin.lineinfile:
+        path: "{{ app_dir }}/todo/settings.py"
+        regexp: '^DEBUG\s*='
+        line: "DEBUG = False"
+      when: not django_debug
+      become_user: "{{ app_user }}"
+      notify: Redémarrer todolist
+
+    - name: Mise à jour de pip et wheel dans le venv
+      ansible.builtin.pip:
+        name:
+          - pip
+          - wheel
+        state: latest
+        virtualenv: "{{ venv_dir }}"
+        virtualenv_command: python3 -m venv
+
+    - name: Installation des dépendances Python
+      ansible.builtin.pip:
+        name:
+          - "django>=5.2,<5.3"
+          - "requests==2.19.1"
+          - gunicorn
+          - "cython<3"
+        virtualenv: "{{ venv_dir }}"
+
+    - name: Installation de PyYAML 5.3.1 (compilation avec Cython 2)
+      ansible.builtin.pip:
+        name: "pyyaml==5.3.1"
+        virtualenv: "{{ venv_dir }}"
+        extra_args: --no-build-isolation
+
+    - name: Migrations Django
+      ansible.builtin.command:
+        cmd: "{{ venv_dir }}/bin/python manage.py migrate --noinput"
+        chdir: "{{ app_dir }}"
+      become_user: "{{ app_user }}"
+      register: migrate_out
+      changed_when: "'No migrations to apply' not in migrate_out.stdout"
+
+    - name: Déploiement du service systemd todolist
+      ansible.builtin.template:
+        src: templates/todolist.service.j2
+        dest: /etc/systemd/system/todolist.service
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Redémarrer todolist
+
+    - name: Activation et démarrage du service todolist
+      ansible.builtin.systemd:
+        name: todolist
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Application des redémarrages en attente avant le contrôle
+      ansible.builtin.meta: flush_handlers
+
+    - name: Contrôle de l'application depuis le poste de contrôle
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}/"
+        status_code: 200
+        return_content: true
+      register: app_check
+      delegate_to: localhost
+      become: false
+      retries: 5
+      delay: 3
+      until: app_check.status == 200 and 'TO DO LIST' in app_check.content
+
+  handlers:
+    - name: Redémarrer todolist
+      ansible.builtin.systemd:
+        name: todolist
+        state: restarted
+        daemon_reload: true
+
+- name: Durcissement des serveurs
+  hosts: my_infra
+  become: true
+
+  tasks:
+    # ---------- Exercice 14 : SSH ----------
+    - name: Clés SSH autorisées exclusives (admin + déploiement Jenkins)
+      ansible.posix.authorized_key:
+        user: admin
+        key: |-
+          {{ lookup('file', playbook_dir + '/keys/admin.pub') }}
+          {{ lookup('file', playbook_dir + '/keys/jenkins-deploy.pub') }}
+        exclusive: true
+
+    - name: Configuration SSH durcie
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/00-hardening.conf
+        content: |
+          # Géré par Ansible - ne pas modifier à la main
+          PermitRootLogin no
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          PermitEmptyPasswords no
+          PubkeyAuthentication yes
+          AuthenticationMethods publickey
+          AllowUsers admin
+          MaxAuthTries 3
+          LoginGraceTime 30
+          X11Forwarding no
+        owner: root
+        group: root
+        mode: "0600"
+        validate: /usr/sbin/sshd -t -f %s
+      notify: Recharger sshd
+
+    # ---------- Exercice 15 : pare-feu UFW ----------
+    - name: Installation d'UFW
+      ansible.builtin.apt:
+        name: ufw
+        state: present
+
+    - name: Autorisation SSH avec limitation de débit (anti brute-force)
+      community.general.ufw:
+        rule: limit
+        port: "22"
+        proto: tcp
+        comment: "SSH admin"
+
+    - name: Autorisation HTTP
+      community.general.ufw:
+        rule: allow
+        port: "80"
+        proto: tcp
+        comment: "todolist"
+
+    - name: Politique par défaut - sortant autorisé
+      community.general.ufw:
+        direction: outgoing
+        policy: allow
+
+    - name: Politique par défaut - entrant refusé
+      community.general.ufw:
+        direction: incoming
+        policy: deny
+
+    - name: Journalisation des paquets bloqués
+      community.general.ufw:
+        logging: "on"
+
+    - name: Activation d'UFW
+      community.general.ufw:
+        state: enabled
+
+    # ---------- Exercice 16 : mises à jour ----------
+    - name: Mise à jour complète des paquets (apt update + upgrade)
+      ansible.builtin.apt:
+        update_cache: true
+        upgrade: "yes"
+      register: apt_upgrade
+
+    - name: Installation d'unattended-upgrades
+      ansible.builtin.apt:
+        name:
+          - unattended-upgrades
+          - apt-listchanges
+        state: present
+
+    - name: Activation des mises à jour de sécurité automatiques quotidiennes
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        content: |
+          // Géré par Ansible
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Unattended-Upgrade "1";
+          APT::Periodic::AutocleanInterval "7";
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Service unattended-upgrades actif et activé au boot
+      ansible.builtin.systemd:
+        name: unattended-upgrades
+        enabled: true
+        state: started
+
+    - name: Vérification du besoin de redémarrage
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required
+
+    - name: Signalement d'un redémarrage nécessaire (non automatique)
+      ansible.builtin.debug:
+        msg: "Redémarrage nécessaire sur {{ inventory_hostname }} : à planifier dans une fenêtre de maintenance."
+      when: reboot_required.stat.exists
+
+    # ---------- Contrôle final ----------
+    - name: Contrôle de l'application après durcissement
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}/"
+        status_code: 200
+        return_content: true
+      register: app_check_final
+      delegate_to: localhost
+      become: false
+      retries: 5
+      delay: 3
+      until: app_check_final.status == 200 and 'TO DO LIST' in app_check_final.content
+
+  handlers:
+    - name: Recharger sshd
+      ansible.builtin.systemd:
+        name: ssh
+        state: reloaded
+
+- name: Corrections Lynis et audit
+  hosts: my_infra
+  become: true
+
+  tasks:
+    # Finding 1 - KRNL-5820 : désactivation des core dumps
+    - name: Core dumps désactivés pour tous les utilisateurs
+      ansible.builtin.blockinfile:
+        path: /etc/security/limits.conf
+        marker: "# {mark} ANSIBLE - KRNL-5820"
+        block: |
+          * hard core 0
+          * soft core 0
+
+    - name: Core dumps des programmes setuid désactivés
+      ansible.posix.sysctl:
+        name: fs.suid_dumpable
+        value: "0"
+        sysctl_file: /etc/sysctl.d/60-hardening.conf
+        reload: true
+
+    # Finding 2 - AUTH-9328 : umask plus strict
+    - name: Umask par défaut à 027
+      ansible.builtin.lineinfile:
+        path: /etc/login.defs
+        regexp: '^UMASK\s+'
+        line: "UMASK           027"
+
+    # Finding 3 - NETW-3200 : protocoles réseau inutiles
+    - name: Désactivation des protocoles dccp, sctp, rds et tipc
+      ansible.builtin.copy:
+        dest: /etc/modprobe.d/60-protocoles-inutiles.conf
+        content: |
+          # Géré par Ansible - Lynis NETW-3200
+          install dccp /bin/true
+          install sctp /bin/true
+          install rds /bin/true
+          install tipc /bin/true
+          blacklist dccp
+          blacklist sctp
+          blacklist rds
+          blacklist tipc
+        owner: root
+        group: root
+        mode: "0644"
+
+    # Audit
+    - name: Installation de Lynis
+      ansible.builtin.apt:
+        name: lynis
+        state: present
+      tags: [audit]
+
+    - name: Audit Lynis
+      ansible.builtin.shell: "lynis audit system --quiet --no-colors > /dev/null 2>&1; grep hardening_index /var/log/lynis-report.dat"
+      register: lynis_result
+      changed_when: false
+      tags: [audit]
+
+    - name: Score Lynis
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} : {{ lynis_result.stdout }}"
+      tags: [audit]

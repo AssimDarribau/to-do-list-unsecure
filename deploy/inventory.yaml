@@ -1,0 +1,11 @@
+# Cibles du déploiement. La clé SSH n'est PAS ici : elle est fournie
+# au lancement (--private-key) par le poste qui exécute le playbook.
+my_infra:
+  hosts:
+    app-dev:
+      ansible_host: 192.168.16.95
+    app-prod1:
+      ansible_host: 192.168.16.100
+  vars:
+    ansible_user: admin
+    ansible_python_interpreter: /usr/bin/python3
