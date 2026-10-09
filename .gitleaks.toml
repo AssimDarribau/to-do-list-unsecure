@@ -1,0 +1,26 @@
+title = "Règles Gitleaks - todolist"
+
+# On garde toutes les règles par défaut de Gitleaks...
+[extend]
+useDefault = true
+
+# ...et on ajoute celles adaptées à notre stack (Django)
+[[rules]]
+id = "django-secret-key"
+description = "Clé secrète Django en dur dans le code"
+regex = '''SECRET_KEY\s*=\s*['"]([^'"]{20,})['"]'''
+secretGroup = 1
+keywords = ["secret_key"]
+
+[[rules]]
+id = "mot-de-passe-en-dur"
+description = "Mot de passe en dur dans une variable"
+regex = '''(?i)[a-z_]*password\s*=\s*['"]([^'"]{6,})['"]'''
+secretGroup = 1
+keywords = ["password"]
+
+# Faux positifs connus
+[allowlist]
+description = "Clés publiques et valeurs de test"
+paths = ['''deploy/keys/.*\.pub$''']
+regexes = ['''mot-de-passe-de-test''']
