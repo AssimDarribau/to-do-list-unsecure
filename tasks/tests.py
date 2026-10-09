@@ -95,3 +95,13 @@ class TaskViewsTest(TestCase):
 
         self.assertEqual(Task.objects.count(), 0)
         self.assertRedirects(response, "/")
+
+
+from django.test import TestCase as _TestCase
+
+
+class TestVolontairementCasse(_TestCase):
+    """Test volontairement en échec : vérifie que la CI bloque le déploiement (J2 ex. 4)."""
+
+    def test_echec_volontaire(self):
+        self.assertEqual(1, 2, "Échec volontaire : ce code ne doit jamais être déployé")
