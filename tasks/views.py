@@ -8,6 +8,7 @@ from django.middleware.csrf import get_token
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.html import format_html, format_html_join
 from django.utils.http import url_has_allowed_host_and_scheme
+from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
 from .forms import TaskForm
 from .models import Task
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 HOME_URL = "/"
 
 
+@require_http_methods(["GET", "POST"])
 def index(request):
     form = TaskForm()
 
@@ -35,6 +37,7 @@ def index(request):
     return render(request, "tasks/list.html", context)
 
 
+@require_http_methods(["GET", "POST"])
 def update_task(request, pk):
     task = get_object_or_404(Task, id=pk)
     form = TaskForm(instance=task)
@@ -49,6 +52,7 @@ def update_task(request, pk):
     return render(request, "tasks/update_task.html", {"form": form})
 
 
+@require_http_methods(["GET", "POST"])
 def delete_task(request, pk):
     item = get_object_or_404(Task, id=pk)
 
@@ -65,6 +69,7 @@ def delete_task(request, pk):
     return render(request, "tasks/delete.html", {"item": item})
 
 
+@require_GET
 def search_tasks(request):
     query = request.GET.get("q", "")
     tasks = Task.objects.filter(title__icontains=query)
@@ -72,6 +77,7 @@ def search_tasks(request):
     return HttpResponse(format_html("<ul>{}</ul>", items))
 
 
+@require_http_methods(["GET", "POST"])
 def import_tasks(request):
     if request.method == "POST":
         try:
@@ -97,6 +103,7 @@ def import_tasks(request):
     )
 
 
+@require_POST
 def admin_panel(request):
     expected = os.environ.get("TODOLIST_ADMIN_PASSWORD", "")
     provided = request.POST.get("pwd", "")
