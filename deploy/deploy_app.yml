@@ -368,6 +368,14 @@
         mode: "o-rwx"
         recurse: true
 
+    - name: Dossier de surcharge systemd du service Jenkins
+      ansible.builtin.file:
+        path: /etc/systemd/system/jenkins.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
     - name: Fichiers créés par Jenkins non lisibles par les autres comptes (UMask 0027)
       ansible.builtin.copy:
         dest: /etc/systemd/system/jenkins.service.d/override.conf
