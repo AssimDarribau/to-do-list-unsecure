@@ -1,4 +1,4 @@
-# Cibles du déploiement. La clé SSH n'est PAS ici : elle est fournie
+# Cibles Ansible. La clé SSH n'est PAS ici : elle est fournie
 # au lancement (--private-key) par le poste qui exécute le playbook.
 my_infra:
   hosts:
@@ -6,6 +6,14 @@ my_infra:
       ansible_host: 192.168.16.95
     app-prod1:
       ansible_host: 192.168.16.100
+
+# Serveur CI/CD : durci depuis le poste d'administration, jamais par Jenkins lui-même
+ci:
+  hosts:
+    jenkins:
+      ansible_host: 192.168.16.105
+
+all:
   vars:
     ansible_user: admin
     ansible_python_interpreter: /usr/bin/python3

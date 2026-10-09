@@ -1,0 +1,8 @@
+---
+# Serveurs applicatifs : accès admin + compte de déploiement Jenkins
+authorized_pubkeys:
+  - keys/admin.pub
+  - keys/jenkins-deploy.pub
+# Ports ouverts en plus de SSH
+ufw_allowed_ports:
+  - { port: "80", src: "any", comment: "todolist" }

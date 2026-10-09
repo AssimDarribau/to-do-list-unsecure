@@ -1,0 +1,7 @@
+---
+# Serveur Jenkins : seul l'administrateur s'y connecte en SSH
+authorized_pubkeys:
+  - keys/admin.pub
+# Interface Jenkins accessible uniquement depuis le réseau d'administration
+ufw_allowed_ports:
+  - { port: "8080", src: "192.168.16.0/24", comment: "Jenkins (réseau d'administration)" }

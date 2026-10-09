@@ -144,17 +144,15 @@
         daemon_reload: true
 
 - name: Durcissement des serveurs
-  hosts: my_infra
+  hosts: my_infra:ci
   become: true
 
   tasks:
     # ---------- Exercice 14 : SSH ----------
-    - name: Clés SSH autorisées exclusives (admin + déploiement Jenkins)
+    - name: Clés SSH autorisées exclusives (définies par groupe)
       ansible.posix.authorized_key:
         user: admin
-        key: |-
-          {{ lookup('file', playbook_dir + '/keys/admin.pub') }}
-          {{ lookup('file', playbook_dir + '/keys/jenkins-deploy.pub') }}
+        key: "{{ query('file', *(authorized_pubkeys | map('regex_replace', '^', playbook_dir + '/') | list)) | join('\n') }}"
         exclusive: true
 
     - name: Configuration SSH durcie
@@ -191,12 +189,14 @@
         proto: tcp
         comment: "SSH admin"
 
-    - name: Autorisation HTTP
+    - name: Ports applicatifs autorisés (définis par groupe)
       community.general.ufw:
         rule: allow
-        port: "80"
+        port: "{{ item.port }}"
         proto: tcp
-        comment: "todolist"
+        from_ip: "{{ item.src }}"
+        comment: "{{ item.comment }}"
+      loop: "{{ ufw_allowed_ports }}"
 
     - name: Politique par défaut - sortant autorisé
       community.general.ufw:
@@ -270,6 +270,7 @@
       retries: 5
       delay: 3
       until: app_check_final.status == 200 and 'TO DO LIST' in app_check_final.content
+      when: inventory_hostname in groups['my_infra']
 
   handlers:
     - name: Recharger sshd
@@ -278,7 +279,7 @@
         state: reloaded
 
 - name: Corrections Lynis et audit
-  hosts: my_infra
+  hosts: my_infra:ci
   become: true
 
   tasks:
@@ -340,3 +341,48 @@
       ansible.builtin.debug:
         msg: "{{ inventory_hostname }} : {{ lynis_result.stdout }}"
       tags: [audit]
+
+
+- name: Moindre privilège du compte Jenkins (J2 - exercice 6)
+  hosts: ci
+  become: true
+
+  tasks:
+    - name: Compte jenkins sans shell interactif ni mot de passe utilisable
+      ansible.builtin.user:
+        name: jenkins
+        shell: /usr/sbin/nologin
+        password_lock: true
+
+    - name: Aucune règle sudo pour jenkins
+      ansible.builtin.file:
+        path: /etc/sudoers.d/jenkins
+        state: absent
+
+    - name: JENKINS_HOME verrouillé (lecture interdite aux autres comptes)
+      ansible.builtin.file:
+        path: /var/lib/jenkins
+        state: directory
+        owner: jenkins
+        group: jenkins
+        mode: "o-rwx"
+        recurse: true
+
+    - name: Fichiers créés par Jenkins non lisibles par les autres comptes (UMask 0027)
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/jenkins.service.d/override.conf
+        content: |
+          # Géré par Ansible
+          [Service]
+          UMask=0027
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Redémarrer Jenkins
+
+  handlers:
+    - name: Redémarrer Jenkins
+      ansible.builtin.systemd:
+        name: jenkins
+        state: restarted
+        daemon_reload: true
