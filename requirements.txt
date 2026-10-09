@@ -1,0 +1,4 @@
+# Dépendances de l'application (versions corrigées des CVE connues)
+django>=5.2,<5.3
+pyyaml>=6.0.2,<7
+requests>=2.33,<3

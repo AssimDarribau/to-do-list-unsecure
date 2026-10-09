@@ -9,6 +9,9 @@ Type=simple
 User={{ app_user }}
 Group={{ app_user }}
 WorkingDirectory={{ app_dir }}
+# Secrets et configuration injectés par variables d'environnement (lus par systemd en root)
+EnvironmentFile=/etc/todolist/app.env
+EnvironmentFile=/etc/todolist/secret.env
 ExecStart={{ venv_dir }}/bin/gunicorn --workers 2 --bind 0.0.0.0:80 todo.wsgi:application
 ExecReload=/bin/kill -s HUP $MAINPID
 Restart=on-failure
