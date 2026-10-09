@@ -64,15 +64,6 @@
       become_user: "{{ app_user }}"
       notify: Redémarrer todolist
 
-    - name: Passage de Django en mode production (DEBUG = False)
-      ansible.builtin.lineinfile:
-        path: "{{ app_dir }}/todo/settings.py"
-        regexp: '^DEBUG\s*='
-        line: "DEBUG = False"
-      when: not django_debug
-      become_user: "{{ app_user }}"
-      notify: Redémarrer todolist
-
     - name: Mise à jour de pip et wheel dans le venv
       ansible.builtin.pip:
         name:
@@ -82,20 +73,63 @@
         virtualenv: "{{ venv_dir }}"
         virtualenv_command: python3 -m venv
 
-    - name: Installation des dépendances Python
+    - name: Présence d'un requirements.txt dans la branche déployée
+      ansible.builtin.stat:
+        path: "{{ app_dir }}/requirements.txt"
+      register: requirements_file
+
+    - name: Installation des dépendances Python (requirements.txt du dépôt)
+      ansible.builtin.pip:
+        requirements: "{{ app_dir }}/requirements.txt"
+        virtualenv: "{{ venv_dir }}"
+      when: requirements_file.stat.exists
+      notify: Redémarrer todolist
+
+    - name: Installation des dépendances historiques (branches sans requirements.txt)
       ansible.builtin.pip:
         name:
           - "django>=5.2,<5.3"
           - "requests==2.19.1"
-          - gunicorn
           - "cython<3"
         virtualenv: "{{ venv_dir }}"
+      when: not requirements_file.stat.exists
 
-    - name: Installation de PyYAML 5.3.1 (compilation avec Cython 2)
+    - name: Installation de PyYAML 5.3.1 (branches sans requirements.txt)
       ansible.builtin.pip:
         name: "pyyaml==5.3.1"
         virtualenv: "{{ venv_dir }}"
         extra_args: --no-build-isolation
+      when: not requirements_file.stat.exists
+
+    # ---------- Secrets et configuration hors du code (J2 - exercice 14) ----------
+    - name: Dossier de configuration de l'application
+      ansible.builtin.file:
+        path: /etc/todolist
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Clé secrète Django générée une seule fois, sur le serveur
+      ansible.builtin.shell: |
+        umask 077
+        printf 'DJANGO_SECRET_KEY=%s\n' "$(python3 -c 'import secrets; print(secrets.token_urlsafe(50))')" > /etc/todolist/secret.env
+      args:
+        creates: /etc/todolist/secret.env
+      no_log: true
+      notify: Redémarrer todolist
+
+    - name: Configuration non secrète de l'environnement
+      ansible.builtin.copy:
+        dest: /etc/todolist/app.env
+        content: |
+          # Géré par Ansible
+          DJANGO_DEBUG={{ 'True' if django_debug else 'False' }}
+          DJANGO_ALLOWED_HOSTS={{ ansible_host }},localhost,127.0.0.1
+        owner: root
+        group: root
+        mode: "0600"
+      notify: Redémarrer todolist
 
     - name: Migrations Django
       ansible.builtin.command:
